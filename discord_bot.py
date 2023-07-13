@@ -17,15 +17,9 @@ current_song = None
 async def play(ctx, url, volume=0.1):
     channel = ctx.message.author.voice.channel
     voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
-
-    if voice_client and voice_client.is_playing():
-        # Queue the song if bot is already playing
-        await ctx.send("Added to queue.")
-        song_queue.append(url)
-    else:
-        voice_client = await channel.connect()
-        await voice_client.guild.change_voice_state(channel=channel, self_deaf=True)
-        await play_song(ctx, voice_client, url, volume)
+    voice_client = await channel.connect()
+    await voice_client.guild.change_voice_state(channel=channel, self_deaf=True)
+    await play_song(ctx, voice_client, url, volume)
 
 
 async def play_song(ctx, voice_client, url, volume):
@@ -50,18 +44,6 @@ async def play_song(ctx, voice_client, url, volume):
         'source_address': '0.0.0.0'
     }
 
-    async def disconnect_callback(error):
-        if error:
-            print(f"Error during playback: {error}")
-        await voice_client.disconnect()
-
-    async def load_next_song():
-        if len(song_queue) > 0:  # Check if there are songs in the queue
-            next_song = song_queue.pop(0)  # Updated variable name
-            await play_song(ctx, voice_client, next_song, volume)
-        else:
-            await voice_client.disconnect()
-
     async with ctx.typing():
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -69,7 +51,6 @@ async def play_song(ctx, voice_client, url, volume):
             player = discord.FFmpegPCMAudio(url2, executable='ffmpeg', pipe=False,
                                             before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5')
             volume_adjusted = discord.PCMVolumeTransformer(player, volume)
-            volume_adjusted.after = disconnect_callback
             voice_client.play(volume_adjusted)
 
         global current_song
@@ -77,31 +58,8 @@ async def play_song(ctx, voice_client, url, volume):
         await ctx.send(f"Now playing: {current_song}")
 
         while voice_client.is_playing():
-            await asyncio.sleep(2)
-            if len(song_queue) > 0 and not voice_client.is_playing():
-                await load_next_song()
-
-    # Start loading the next song if it's already available in the queue
-    if len(song_queue) > 0 and not voice_client.is_playing():
-        await load_next_song()
-
-
-@bot.command(aliases=['s'])
-async def skip(ctx):
-    voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
-
-    if voice_client and voice_client.is_playing():
-        voice_client.stop()
-        await ctx.send("Skipped the current song.")
-
-
-@bot.command(aliases=['q'])
-async def queue(ctx):
-    if len(song_queue) > 0:  # Updated variable name
-        queue_list = '\n'.join(song_queue)  # Updated variable name
-        await ctx.send(f"Queue:\n{queue_list}")
-    else:
-        await ctx.send("The queue is empty.")
+            await asyncio.sleep(1)
+        await voice_client.disconnect()
 
 
 @bot.command()
