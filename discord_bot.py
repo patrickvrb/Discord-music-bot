@@ -3,11 +3,16 @@ from discord.ext import commands
 import yt_dlp
 import asyncio
 import time
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 intents = discord.Intents.default()
 intents.voice_states = True
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+DISCORD_BOT_KEY = os.getenv("DISCORD_BOT_KEY")
 
 song_queue = []
 current_song = None
@@ -118,4 +123,4 @@ async def disconnect_voice_client(guild):
     if voice_client and voice_client.is_connected():
         await voice_client.disconnect()
 
-bot.run('MTEyODE2NDA5MjUwNzYwNzE0MA.GZz9Z8.THZKAYGygQsTZ1cHEYvyg8uF8GUislQn-satqk')
+bot.run(DISCORD_BOT_KEY)
