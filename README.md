@@ -22,9 +22,11 @@ Resumes paused playback
 
 ## Instructions
 
+- Create a Discord application at https://discord.com/developers
+- Under "bot" panel, save your `token`, you'll need it later
 - Clone repository
 - (Recomended but optional) Create a virtual environment: `python -m venv venv` for a `venv` named environment
 - Install dependencies: `pip install -r requirements.txt`
-- Create a `.env` file and place your discord bot key under `DISCORD_BOT_KEY` variable name
+- Create a `.env` file and place your discord bot token under `DISCORD_BOT_KEY` variable name
 - Run: `python discord_bot.py`
 - Enjoy :)
