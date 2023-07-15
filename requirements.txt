@@ -19,4 +19,4 @@ PyNaCl==1.5.0
 python-dotenv==1.0.0
 websockets==11.0.3
 yarl==1.9.2
-yt-dlp @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz#sha256=75425a5439c9e57b3a836df2cc12076497f679b4534ff9acf29d32ece06b8cb7
+yt-dlp==2023.7.6
