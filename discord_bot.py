@@ -14,6 +14,10 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 DISCORD_BOT_KEY = os.getenv("DISCORD_BOT_KEY")
 
+if not DISCORD_BOT_KEY:
+    print('ERROR: Bot key not found')
+    exit()
+
 song_queue = []
 current_song = None
 
