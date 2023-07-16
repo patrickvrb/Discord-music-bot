@@ -44,6 +44,13 @@ async def play_next(ctx, voice_client, volume):
         url = song_queue.pop(0)  # Remove and get the first URL from the queue
         await play_song(ctx, voice_client, url, volume)
     else:
+        # Wait for 5 seconds before disconnecting (adjust as needed)
+        await asyncio.sleep(2)
+        if voice_client.is_playing():
+            # Wait for 1 second to ensure the song finishes playing
+            await asyncio.sleep(1)
+            while voice_client.is_playing():
+                await asyncio.sleep(5)
         await ctx.send("Leaving server...")
         await disconnect_voice_client(ctx.guild)
 
@@ -72,17 +79,18 @@ async def play_song(ctx, voice_client, url, volume):
         format_index = 0
         # Get first audio only (default) file
         for i, item in enumerate(info['formats']):
-            if 'audio only (Default)' in item["format"]:
+            if 'audio only' in item["format"]:
                 format_index = i
                 break
-
         print(f"Extracted info in {(time.time() - time1):.2f} seconds")
-        url2 = info['formats'][format_index]['url']
+
         time1 = time.time()
-        player = discord.FFmpegPCMAudio(url2, executable='ffmpeg', pipe=False,
-                                        before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -fflags +discardcorrupt -err_detect ignore_err', options='-vn')
-        print(f"Extracted player in {(time.time() - time1):.2f} seconds")
+        url2 = info['formats'][format_index]['url']
+        player = discord.FFmpegPCMAudio(
+            url2, before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -fflags +discardcorrupt')
         volume_adjusted = discord.PCMVolumeTransformer(player, volume)
+        print(f"Extracted player in {(time.time() - time1):.2f} seconds")
+
         voice_client.play(volume_adjusted, after=lambda e: asyncio.run_coroutine_threadsafe(
             play_next(ctx, voice_client, volume), bot.loop))
         global current_song
