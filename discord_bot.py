@@ -86,10 +86,10 @@ async def play_song(ctx, voice_client, url, volume):
         player = discord.FFmpegPCMAudio(
             media_file_url, before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -fflags +discardcorrupt')
         volume_adjusted = discord.PCMVolumeTransformer(player, volume)
-        print(f"Extracted player in {(time.time() - time1):.1f} seconds")
-
         voice_client.play(volume_adjusted, after=lambda e: asyncio.run_coroutine_threadsafe(
             play_next(ctx, voice_client, volume), bot.loop))
+        print(f"Extracted player in {(time.time() - time1):.1f} seconds")
+
         await ctx.send(f"Now playing: {info['title']}")
 
 
@@ -107,8 +107,8 @@ async def skip(ctx):
     voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
 
     if voice_client and voice_client.is_connected():
-        voice_client.stop()
         await ctx.send("Skipping...")
+        voice_client.stop()
 
 
 @bot.command()
@@ -129,5 +129,10 @@ async def disconnect_voice_client(guild):
     voice_client = discord.utils.get(bot.voice_clients, guild=guild)
     if voice_client and voice_client.is_connected():
         await voice_client.disconnect()
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    await ctx.send("Comando não existente")
 
 bot.run(DISCORD_BOT_KEY)
