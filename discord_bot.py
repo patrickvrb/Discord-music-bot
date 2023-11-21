@@ -22,7 +22,7 @@ song_queue = []
 
 
 @bot.command(aliases=['p'])
-async def play(ctx, url, volume='0.1'):
+async def play(ctx, url, volume='0.5'):
     channel = ctx.message.author.voice.channel
     voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
     if voice_client and voice_client.is_playing():
@@ -57,6 +57,7 @@ async def play_next(ctx, voice_client, volume):
 async def play_song(ctx, voice_client, url, volume):
     ydl_opts = {
         'format': 'bestaudio/best',
+        'title': True,
         'extractaudio': True,
         'audioformat': 'mp3',
         'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -65,32 +66,26 @@ async def play_song(ctx, voice_client, url, volume):
         'nocheckcertificate': True,
         'ignoreerrors': False,
         'logtostderr': False,
-        'quiet': True,
+        # 'quiet': True,
         'no_warnings': True,
         'default_search': 'auto',
         'source_address': '0.0.0.0',
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        time1 = time.time()
-        info = ydl.extract_info(url, download=False)
-        media_file_url = ''
-        # Get first audio only file
-        for i, item in enumerate(info['formats']):
-            if 'audio only' in item["format"]:
-                media_file_url = info['formats'][i]['url']
-                break
-        print(f"Extracted info in {(time.time() - time1):.1f} seconds")
+    time1 = time.time()
+    info = yt_dlp.YoutubeDL(ydl_opts).extract_info(url, download=False)
+    media_file_url = info.get('url')
+    print(f"Extracted info in {(time.time() - time1):.1f} seconds")
 
-        time1 = time.time()
-        player = discord.FFmpegPCMAudio(
-            media_file_url, before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -fflags +discardcorrupt')
-        volume_adjusted = discord.PCMVolumeTransformer(player, volume)
-        voice_client.play(volume_adjusted, after=lambda e: asyncio.run_coroutine_threadsafe(
-            play_next(ctx, voice_client, volume), bot.loop))
-        print(f"Extracted player in {(time.time() - time1):.1f} seconds")
+    time1 = time.time()
+    player = discord.FFmpegPCMAudio(
+        media_file_url, before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5')
+    volume_adjusted = discord.PCMVolumeTransformer(player, volume)
+    voice_client.play(volume_adjusted, after=lambda e: asyncio.run_coroutine_threadsafe(
+        play_next(ctx, voice_client, volume), bot.loop))
+    print(f"Extracted player in {(time.time() - time1):.1f} seconds")
 
-        await ctx.send(f"Now playing: {info['title']}")
+    await ctx.send(f"Now playing: {info['title']}")
 
 
 @bot.command()
