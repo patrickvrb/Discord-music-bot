@@ -1,10 +1,10 @@
+import os
 import discord
 from discord.ext import commands
-import yt_dlp
+import youtube_dl
 import asyncio
 import time
 from dotenv import load_dotenv
-import os
 
 load_dotenv()
 intents = discord.Intents.default()
@@ -13,7 +13,6 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 DISCORD_BOT_KEY = os.getenv("DISCORD_BOT_KEY")
-
 if not DISCORD_BOT_KEY:
     print('ERROR: Bot key not found')
     exit()
@@ -73,7 +72,7 @@ async def play_song(ctx, voice_client, url, volume):
     }
 
     time1 = time.time()
-    info = yt_dlp.YoutubeDL(ydl_opts).extract_info(url, download=False)
+    info = youtube_dl.YoutubeDL(ydl_opts).extract_info(url, download=False)
     media_file_url = info.get('url')
     print(f"Extracted info in {(time.time() - time1):.1f} seconds")
 
@@ -128,6 +127,6 @@ async def disconnect_voice_client(guild):
 
 @bot.event
 async def on_command_error(ctx, error):
-    await ctx.send("Comando não existente")
+    await ctx.send(error)
 
 bot.run(DISCORD_BOT_KEY)
