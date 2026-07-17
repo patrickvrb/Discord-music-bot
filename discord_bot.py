@@ -1,7 +1,8 @@
 import os
 import discord
 from discord.ext import commands
-import youtube_dl
+import yt_dlp as youtube_dl
+import imageio_ffmpeg
 import asyncio
 import time
 from dotenv import load_dotenv
@@ -53,6 +54,13 @@ async def play_next(ctx, voice_client, volume):
         await disconnect_voice_client(ctx.guild)
 
 
+async def handle_player_finished(ctx, voice_client, volume, error):
+    if error:
+        print(f"Playback error: {error}")
+        await ctx.send(f"Playback failed: {error}")
+    await play_next(ctx, voice_client, volume)
+
+
 async def play_song(ctx, voice_client, url, volume):
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -74,14 +82,23 @@ async def play_song(ctx, voice_client, url, volume):
     time1 = time.time()
     info = youtube_dl.YoutubeDL(ydl_opts).extract_info(url, download=False)
     media_file_url = info.get('url')
+    http_headers = info.get('http_headers', {})
+    ffmpeg_headers = ''.join(f'{name}: {value}\r\n' for name, value in http_headers.items())
     print(f"Extracted info in {(time.time() - time1):.1f} seconds")
 
     time1 = time.time()
+    before_options = '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
+    if ffmpeg_headers:
+        before_options += f' -headers "{ffmpeg_headers}"'
     player = discord.FFmpegPCMAudio(
-        media_file_url, before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5')
+        media_file_url,
+        executable=imageio_ffmpeg.get_ffmpeg_exe(),
+        before_options=before_options,
+    )
+
     volume_adjusted = discord.PCMVolumeTransformer(player, volume)
     voice_client.play(volume_adjusted, after=lambda e: asyncio.run_coroutine_threadsafe(
-        play_next(ctx, voice_client, volume), bot.loop))
+        handle_player_finished(ctx, voice_client, volume, e), bot.loop))
     print(f"Extracted player in {(time.time() - time1):.1f} seconds")
 
     await ctx.send(f"Now playing: {info['title']}")
