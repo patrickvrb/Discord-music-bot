@@ -4,7 +4,8 @@ import sys
 from pathlib import Path
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from itertools import islice
+from itertools import chain, islice
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import discord
 import imageio_ffmpeg
@@ -14,6 +15,14 @@ from dotenv import load_dotenv
 
 PLAYLIST_LIMIT = 50
 IDLE_DISCONNECT_DELAY = 2
+YOUTUBE_HOSTS = {
+    'youtube.com',
+    'www.youtube.com',
+    'm.youtube.com',
+    'music.youtube.com',
+    'youtu.be',
+    'www.youtu.be',
+}
 
 
 @dataclass
@@ -80,6 +89,60 @@ player_tasks = {}
 pending_links = set()
 
 
+def parse_youtube_playlist_url(url):
+    """Return a playlist extraction URL and the explicitly selected video ID."""
+    try:
+        parsed_url = urlsplit(url)
+    except ValueError:
+        return url, None
+
+    hostname = (parsed_url.hostname or '').lower().rstrip('.')
+    if hostname not in YOUTUBE_HOSTS:
+        return url, None
+
+    playlist_ids = parse_qs(parsed_url.query, keep_blank_values=True).get('list')
+    if not playlist_ids or not playlist_ids[0].strip():
+        return url, None
+
+    if parsed_url.path.rstrip('/') == '/playlist':
+        return url, None
+
+    query = urlencode({'list': playlist_ids[0]})
+    video_ids = parse_qs(parsed_url.query).get('v')
+    if parsed_url.path.rstrip('/') == '/watch':
+        selected_video_id = video_ids[0].strip() if video_ids else None
+    elif hostname in {'youtu.be', 'www.youtu.be'}:
+        selected_video_id = parsed_url.path.strip('/') or None
+    else:
+        selected_video_id = None
+    return f'https://www.youtube.com/playlist?{query}', selected_video_id
+
+
+def normalize_youtube_playlist_url(url):
+    """Turn a YouTube watch URL with a playlist ID into a playlist URL."""
+    extraction_url, _ = parse_youtube_playlist_url(url)
+    return extraction_url
+
+
+def track_from_info(info, original_url, volume, channel):
+    title = info.get('title') or original_url
+    webpage_url = info.get('webpage_url') or info.get('original_url') or original_url
+    return Track(webpage_url, title, volume, channel)
+
+
+def extract_single_track(url, volume, channel):
+    ydl_opts = {
+        'ignoreerrors': True,
+        'noplaylist': True,
+        'no_warnings': True,
+        'quiet': True,
+    }
+    info = youtube_dl.YoutubeDL(ydl_opts).extract_info(url, download=False)
+    if not info:
+        return []
+    return [track_from_info(info, url, volume, channel)]
+
+
 def extract_tracks(url, volume, channel):
     ydl_opts = {
         'extract_flat': True,
@@ -87,22 +150,34 @@ def extract_tracks(url, volume, channel):
         'lazy_playlist': True,
         'noplaylist': False,
         'no_warnings': True,
-        'playlistend': PLAYLIST_LIMIT,
         'quiet': True,
     }
-    info = youtube_dl.YoutubeDL(ydl_opts).extract_info(url, download=False)
+    extraction_url, selected_video_id = parse_youtube_playlist_url(url)
+    if selected_video_id is None:
+        ydl_opts['playlistend'] = PLAYLIST_LIMIT
+    info = youtube_dl.YoutubeDL(ydl_opts).extract_info(extraction_url, download=False)
     if not info:
         return [], 1, False
 
     entries = info.get('entries')
     if entries is None:
-        title = info.get('title') or url
-        webpage_url = info.get('webpage_url') or info.get('original_url') or url
-        return [Track(webpage_url, title, volume, channel)], 0, False
+        return [track_from_info(info, url, volume, channel)], 0, False
 
     tracks = []
     unavailable = 0
-    for entry in islice(entries, PLAYLIST_LIMIT):
+    selected_video_found = selected_video_id is None
+    selected_entries = iter(entries)
+    if not selected_video_found:
+        for entry in selected_entries:
+            if entry and entry.get('id') == selected_video_id:
+                selected_entries = chain((entry,), selected_entries)
+                selected_video_found = True
+                break
+
+    if not selected_video_found:
+        return extract_single_track(url, volume, channel), 0, False
+
+    for entry in islice(selected_entries, PLAYLIST_LIMIT):
         if not entry:
             unavailable += 1
             continue
