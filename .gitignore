@@ -4,3 +4,4 @@ venv
 .env
 *.log
 __pycache__
+.bot.lock

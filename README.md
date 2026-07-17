@@ -1,12 +1,12 @@
 # Discord bot to play YouTube URLs
 
-Discord bot python application to reproduce YouTube audio. Supports queueing.
+Discord bot Python application to reproduce YouTube audio. Supports per-server queues and YouTube playlists.
 
 ## Features
 
-### !play | !p \<youtube url>
+### !play | !p \<youtube url> [volume]
 
-Plays Youtube's URL audio in the best quality possible
+Plays a YouTube video or queues up to 50 tracks from a YouTube playlist in order. Volume defaults to `0.5` and accepts values from `0` to `2`.
 
 ### !pause
 
