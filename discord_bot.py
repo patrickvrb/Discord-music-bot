@@ -5,7 +5,7 @@ from pathlib import Path
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from itertools import chain, islice
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 import discord
 import imageio_ffmpeg
@@ -89,6 +89,47 @@ player_tasks = {}
 pending_links = set()
 
 
+def normalize_youtube_radio_url(url):
+    """Strip generated YouTube radio context from an individual video URL."""
+    try:
+        parsed_url = urlsplit(url)
+    except ValueError:
+        return url, False
+
+    hostname = (parsed_url.hostname or '').lower().rstrip('.')
+    if hostname not in YOUTUBE_HOSTS:
+        return url, False
+
+    query_items = parse_qsl(parsed_url.query, keep_blank_values=True)
+    playlist_id = next(
+        (value.strip() for name, value in query_items if name == 'list'),
+        '',
+    )
+    if not playlist_id.startswith('RD'):
+        return url, False
+
+    query = parse_qs(parsed_url.query)
+    if parsed_url.path.rstrip('/') == '/watch':
+        video_ids = query.get('v')
+        selected_video_id = video_ids[0].strip() if video_ids else None
+    elif hostname in {'youtu.be', 'www.youtu.be'}:
+        selected_video_id = parsed_url.path.strip('/') or None
+    else:
+        selected_video_id = None
+    if not selected_video_id:
+        return url, False
+
+    filtered_query = [
+        (name, value)
+        for name, value in query_items
+        if name not in {'list', 'start_radio'}
+    ]
+    normalized_url = urlunsplit(
+        parsed_url._replace(query=urlencode(filtered_query))
+    )
+    return normalized_url, True
+
+
 def parse_youtube_playlist_url(url):
     """Return a playlist extraction URL and the explicitly selected video ID."""
     try:
@@ -120,6 +161,9 @@ def parse_youtube_playlist_url(url):
 
 def normalize_youtube_playlist_url(url):
     """Turn a YouTube watch URL with a playlist ID into a playlist URL."""
+    radio_url, is_radio = normalize_youtube_radio_url(url)
+    if is_radio:
+        return radio_url
     extraction_url, _ = parse_youtube_playlist_url(url)
     return extraction_url
 
@@ -144,6 +188,10 @@ def extract_single_track(url, volume, channel):
 
 
 def extract_tracks(url, volume, channel):
+    radio_url, is_radio = normalize_youtube_radio_url(url)
+    if is_radio:
+        return extract_single_track(radio_url, volume, channel), 0, False
+
     ydl_opts = {
         'extract_flat': True,
         'ignoreerrors': True,

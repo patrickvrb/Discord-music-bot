@@ -53,7 +53,67 @@ class NormalizeYouTubePlaylistUrlTests(unittest.TestCase):
         self.assertEqual(discord_bot.normalize_youtube_playlist_url(url), url)
 
 
+    def test_strips_generated_radio_context_from_video_url(self):
+        url = (
+            'https://www.youtube.com/watch?v=_Z5-P9v3F8w'
+            '&list=RD_Z5-P9v3F8w&start_radio=1'
+        )
+
+        self.assertEqual(
+            discord_bot.normalize_youtube_playlist_url(url),
+            'https://www.youtube.com/watch?v=_Z5-P9v3F8w',
+        )
+
+    def test_strips_radio_context_from_supported_video_urls(self):
+        urls = (
+            (
+                'https://m.youtube.com/watch?v=video-id&list=RDvideo-id'
+                '&start_radio=1',
+                'https://m.youtube.com/watch?v=video-id',
+            ),
+            (
+                'https://music.youtube.com/watch?v=video-id&list=RDvideo-id'
+                '&start_radio=1',
+                'https://music.youtube.com/watch?v=video-id',
+            ),
+            (
+                'https://youtu.be/video-id?list=RDvideo-id&start_radio=1',
+                'https://youtu.be/video-id',
+            ),
+        )
+
+        for url, expected in urls:
+            with self.subTest(url=url):
+                self.assertEqual(
+                    discord_bot.normalize_youtube_playlist_url(url), expected
+                )
+
+
 class ExtractTracksTests(unittest.TestCase):
+    @patch.object(discord_bot.youtube_dl, 'YoutubeDL')
+    def test_generated_radio_url_extracts_only_selected_video(self, youtube_dl):
+        youtube_dl.return_value.extract_info.return_value = {
+            'id': '_Z5-P9v3F8w',
+            'title': 'Selected track',
+            'webpage_url': 'https://www.youtube.com/watch?v=_Z5-P9v3F8w',
+        }
+        url = (
+            'https://www.youtube.com/watch?v=_Z5-P9v3F8w'
+            '&list=RD_Z5-P9v3F8w&start_radio=1'
+        )
+
+        tracks, unavailable, is_playlist = discord_bot.extract_tracks(
+            url, 0.5, object()
+        )
+
+        youtube_dl.return_value.extract_info.assert_called_once_with(
+            'https://www.youtube.com/watch?v=_Z5-P9v3F8w', download=False
+        )
+        self.assertTrue(youtube_dl.call_args.args[0]['noplaylist'])
+        self.assertEqual([track.title for track in tracks], ['Selected track'])
+        self.assertEqual(unavailable, 0)
+        self.assertFalse(is_playlist)
+
     @patch.object(discord_bot.youtube_dl, 'YoutubeDL')
     def test_combined_url_extracts_playlist_entries_in_order(self, youtube_dl):
         youtube_dl.return_value.extract_info.return_value = {

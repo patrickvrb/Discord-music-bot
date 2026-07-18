@@ -6,7 +6,7 @@ Discord bot Python application to reproduce YouTube audio. Supports per-server q
 
 ### !play | !p \<youtube url> [volume]
 
-Plays a YouTube video or queues up to 50 tracks from a YouTube playlist in order. Volume defaults to `0.5` and accepts values from `0` to `2`.
+Plays a YouTube video or queues up to 50 tracks from a YouTube playlist in order. YouTube radio/mix links (`list=RD...`) play only the selected video. Volume defaults to `0.5` and accepts values from `0` to `2`.
 
 ### !pause
 
