@@ -1,4 +1,5 @@
 import asyncio
+import io
 import os
 import sys
 from pathlib import Path
@@ -15,6 +16,8 @@ from dotenv import load_dotenv
 
 PLAYLIST_LIMIT = 50
 IDLE_DISCONNECT_DELAY = 2
+STARTUP_FAILURE_SECONDS = 5
+PLAYBACK_END_TOLERANCE_SECONDS = 5
 YOUTUBE_HOSTS = {
     'youtube.com',
     'www.youtube.com',
@@ -31,6 +34,70 @@ class Track:
     title: str
     volume: float
     channel: object
+
+
+@dataclass
+class PlaybackSession:
+    track: Track
+    skip_requested: bool = False
+
+
+@dataclass
+class PlaybackAttemptResult:
+    started: bool
+    decoded_seconds: float
+    expected_duration: float | None
+    error: Exception | None
+    ffmpeg_diagnostics: str = ''
+
+    @property
+    def ended_prematurely(self):
+        if self.expected_duration is None:
+            return not self.started
+        return (
+            self.decoded_seconds + PLAYBACK_END_TOLERANCE_SECONDS
+            < self.expected_duration
+        )
+
+    @property
+    def failed(self):
+        return self.error is not None or self.ended_prematurely
+
+    @property
+    def startup_failure(self):
+        return self.failed and self.decoded_seconds < STARTUP_FAILURE_SECONDS
+
+
+class PlaybackSource(discord.AudioSource):
+    """Track decoded PCM frames while delegating playback to another source."""
+
+    def __init__(self, source, loop, first_frame):
+        self.source = source
+        self.loop = loop
+        self.first_frame = first_frame
+        self.frame_count = 0
+
+    @property
+    def decoded_seconds(self):
+        return self.frame_count * 0.02
+
+    def read(self):
+        data = self.source.read()
+        if data:
+            self.frame_count += 1
+            if self.frame_count == 1:
+                self.loop.call_soon_threadsafe(mark_first_frame, self.first_frame)
+        return data
+
+    def is_opus(self):
+        return self.source.is_opus()
+
+    def cleanup(self):
+        self.source.cleanup()
+
+
+class PlaybackFailure(RuntimeError):
+    pass
 
 
 def acquire_instance_lock():
@@ -87,6 +154,7 @@ queue_locks = defaultdict(asyncio.Lock)
 connection_locks = defaultdict(asyncio.Lock)
 player_tasks = {}
 pending_links = set()
+active_playbacks = {}
 
 
 def normalize_youtube_radio_url(url):
@@ -256,7 +324,37 @@ def finish_playback(future, error):
         future.set_result(error)
 
 
-async def play_track(voice_client, track):
+def mark_first_frame(future):
+    if not future.done():
+        future.set_result(None)
+
+
+def parse_duration(info):
+    try:
+        duration = float(info.get('duration'))
+    except (TypeError, ValueError):
+        return None
+    return duration if duration > 0 else None
+
+
+def format_ffmpeg_diagnostics(buffer):
+    diagnostics = buffer.getvalue().decode(errors='replace').strip()
+    if not diagnostics:
+        return ''
+    return ' '.join(diagnostics[-2000:].split())
+
+
+def log_playback_attempt(track, attempt, result):
+    print(
+        'Playback attempt: '
+        f'title={track.title!r}, url={track.url!r}, attempt={attempt}, '
+        f'expected_seconds={result.expected_duration!r}, '
+        f'decoded_seconds={result.decoded_seconds:.2f}, '
+        f'error={result.error!r}, ffmpeg={result.ffmpeg_diagnostics!r}'
+    )
+
+
+async def play_track_attempt(voice_client, track, announce):
     info = await asyncio.to_thread(extract_audio, track)
     media_url = info.get('url')
     if not media_url:
@@ -269,21 +367,89 @@ async def play_track(voice_client, track):
     if headers:
         before_options += f' -headers "{headers}"'
 
+    stderr = io.BytesIO()
     player = discord.FFmpegPCMAudio(
         media_url,
         executable=imageio_ffmpeg.get_ffmpeg_exe(),
         before_options=before_options,
+        stderr=stderr,
     )
     source = discord.PCMVolumeTransformer(player, track.volume)
-    finished = bot.loop.create_future()
-    voice_client.play(
-        source,
-        after=lambda error: bot.loop.call_soon_threadsafe(finish_playback, finished, error),
+    loop = asyncio.get_running_loop()
+    finished = loop.create_future()
+    first_frame = loop.create_future()
+    tracked_source = PlaybackSource(source, loop, first_frame)
+    try:
+        voice_client.play(
+            tracked_source,
+            after=lambda error: loop.call_soon_threadsafe(
+                finish_playback, finished, error
+            ),
+        )
+    except Exception:
+        tracked_source.cleanup()
+        raise
+
+    done, _ = await asyncio.wait(
+        (first_frame, finished), return_when=asyncio.FIRST_COMPLETED
     )
-    await track.channel.send(f"Now playing: {info.get('title') or track.title}")
+    started = first_frame in done or first_frame.done()
+    if started and announce:
+        try:
+            await track.channel.send(
+                f"Now playing: {info.get('title') or track.title}"
+            )
+        except Exception as error:
+            print(f'Now-playing message failed: {track.title!r}: {error!r}')
+
     error = await finished
-    if error:
-        raise error
+    if not first_frame.done():
+        first_frame.cancel()
+    return PlaybackAttemptResult(
+        started=tracked_source.frame_count > 0,
+        decoded_seconds=tracked_source.decoded_seconds,
+        expected_duration=parse_duration(info),
+        error=error,
+        ffmpeg_diagnostics=format_ffmpeg_diagnostics(stderr),
+    )
+
+
+async def play_track(voice_client, track):
+    guild_id = voice_client.guild.id
+    session = PlaybackSession(track)
+    active_playbacks[guild_id] = session
+    announced = False
+    try:
+        for attempt in range(1, 3):
+            if session.skip_requested:
+                return
+            try:
+                result = await play_track_attempt(
+                    voice_client, track, announce=not announced
+                )
+            except Exception as error:
+                result = PlaybackAttemptResult(False, 0, None, error)
+
+            announced = announced or result.started
+            log_playback_attempt(track, attempt, result)
+
+            if session.skip_requested:
+                return
+            if not result.failed:
+                return
+            if result.startup_failure and attempt == 1:
+                await track.channel.send(
+                    f"Playback interrupted: {track.title}. Retrying..."
+                )
+                continue
+            if result.startup_failure:
+                raise PlaybackFailure(f'{track.title} failed during startup')
+
+            await track.channel.send(f"Playback ended early: {track.title}.")
+            return
+    finally:
+        if active_playbacks.get(guild_id) is session:
+            active_playbacks.pop(guild_id, None)
 
 
 async def player_worker(guild, voice_client):
@@ -304,6 +470,11 @@ async def player_worker(guild, voice_client):
 
             try:
                 await play_track(voice_client, track)
+            except PlaybackFailure as error:
+                print(f'Playback skipped: {track.title!r}: {error!r}')
+                await track.channel.send(
+                    f"Skipped: {track.title} (playback failed)"
+                )
             except Exception as error:
                 print(f'Playback skipped: {track.title!r}: {error!r}')
                 await track.channel.send(f"Skipped: {track.title}")
@@ -397,6 +568,9 @@ async def pause(ctx):
 async def skip(ctx):
     voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
     if voice_client and voice_client.is_connected():
+        session = active_playbacks.get(ctx.guild.id)
+        if session:
+            session.skip_requested = True
         await ctx.send('Skipping...')
         voice_client.stop()
 
