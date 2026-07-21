@@ -6,6 +6,6 @@
   "deploy": {
     "startCommand": "python discord_bot.py",
     "restartPolicyType": "ALWAYS",
-    "overlapSeconds": "0"
+    "overlapSeconds": 0
   }
 }
