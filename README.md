@@ -34,3 +34,28 @@ Resumes paused playback
 - Create a `.env` file and place your discord bot token under `DISCORD_BOT_KEY` variable name: `DISCORD_BOT_KEY=<your token here>`
 - Run: `python discord_bot.py`
 - Enjoy :)
+
+## Deploying to Railway with GitHub Actions
+
+The workflow in `.github/workflows/deploy-railway.yml` runs the test suite for
+pull requests and pushes. A successful push to `main` deploys the application
+to Railway.
+
+1. Create a Railway project and a service named `discord-music-bot`.
+2. In the Railway service's Variables tab, add
+   `DISCORD_BOT_KEY=<your Discord bot token>`.
+3. In the Railway project settings, create a project token for the production
+   environment.
+4. In the GitHub repository, open **Settings > Secrets and variables > Actions**
+   and add the project token as a repository secret named `RAILWAY_TOKEN`.
+5. Disable Railway's GitHub autodeploy for this service if it is enabled. The
+   GitHub Actions workflow is responsible for deployment, so enabling both
+   would create duplicate deployments.
+6. Push to `main` and follow the **Test and deploy to Railway** workflow in the
+   repository's Actions tab.
+
+Railway uses `railway.json` to build with Railpack, run
+`python discord_bot.py`, restart the always-on worker, and avoid overlapping
+bot instances during deployment. `railpack.json` installs the native Opus
+runtime library required for Discord PCM voice playback. This bot does not need
+a public domain.

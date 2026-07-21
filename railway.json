@@ -1,0 +1,11 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK"
+  },
+  "deploy": {
+    "startCommand": "python discord_bot.py",
+    "restartPolicyType": "ALWAYS",
+    "overlapSeconds": "0"
+  }
+}
