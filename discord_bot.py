@@ -500,8 +500,7 @@ async def ensure_player(guild, voice_channel):
             player_tasks[guild_id] = asyncio.create_task(player_worker(guild, voice_client))
 
 
-@bot.command(aliases=['p'])
-async def play(ctx, url, volume='0.5'):
+async def enqueue_request(ctx, url, volume, priority=False):
     if not ctx.guild or not ctx.message.author.voice:
         await ctx.send('Join a voice channel first.')
         return
@@ -537,15 +536,22 @@ async def play(ctx, url, volume='0.5'):
         return
 
     async with queue_locks[ctx.guild.id]:
-        song_queues[ctx.guild.id].extend(tracks)
+        if priority:
+            song_queues[ctx.guild.id].extendleft(reversed(tracks))
+        else:
+            song_queues[ctx.guild.id].extend(tracks)
 
     if is_playlist:
         message = f"Queued {len(tracks)} playlist tracks"
+        if priority:
+            message += ' next'
         if len(tracks) == PLAYLIST_LIMIT:
             message += f" (limited to {PLAYLIST_LIMIT})"
         if unavailable:
             message += f"; {unavailable} unavailable skipped"
         await ctx.send(message + '.')
+    elif priority:
+        await ctx.send(f"Queued next: {tracks[0].title}")
     else:
         await ctx.send(f"Queued: {tracks[0].title}")
 
@@ -554,6 +560,16 @@ async def play(ctx, url, volume='0.5'):
     except Exception as error:
         print(f'Voice connection failed: {error!r}')
         await ctx.send('Could not connect to the voice channel.')
+
+
+@bot.command(aliases=['p'])
+async def play(ctx, url, volume='0.5'):
+    await enqueue_request(ctx, url, volume)
+
+
+@bot.command()
+async def playp(ctx, url, volume='0.5'):
+    await enqueue_request(ctx, url, volume, priority=True)
 
 
 @bot.command()

@@ -429,6 +429,202 @@ class PlayTrackRecoveryTests(unittest.IsolatedAsyncioTestCase):
             discord_bot.active_playbacks.pop(guild.id, None)
 
 
+class PlayCommandTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.guild = type('Guild', (), {'id': 919191})()
+        self.voice_channel = object()
+        voice = type('VoiceState', (), {'channel': self.voice_channel})()
+        author = type('Author', (), {'voice': voice})()
+        message = type('Message', (), {'author': author})()
+        self.ctx = type(
+            'Context',
+            (),
+            {
+                'guild': self.guild,
+                'channel': AsyncMock(),
+                'message': message,
+                'send': AsyncMock(),
+            },
+        )()
+
+    def tearDown(self):
+        guild_id = self.guild.id
+        discord_bot.song_queues.pop(guild_id, None)
+        discord_bot.queue_locks.pop(guild_id, None)
+        discord_bot.connection_locks.pop(guild_id, None)
+        discord_bot.player_tasks.pop(guild_id, None)
+        discord_bot.active_playbacks.pop(guild_id, None)
+        discord_bot.pending_links = {
+            request
+            for request in discord_bot.pending_links
+            if request[0] != guild_id
+        }
+
+    def make_track(self, title):
+        return discord_bot.Track(
+            f'https://example.com/{title}',
+            title,
+            0.5,
+            self.ctx.channel,
+        )
+
+    async def test_play_still_appends_to_the_waiting_queue(self):
+        waiting = self.make_track('waiting')
+        requested = self.make_track('requested')
+        discord_bot.song_queues[self.guild.id] = deque([waiting])
+
+        with (
+            patch.object(
+                discord_bot.asyncio,
+                'to_thread',
+                new=AsyncMock(return_value=([requested], 0, False)),
+            ),
+            patch.object(
+                discord_bot,
+                'ensure_player',
+                new=AsyncMock(),
+            ) as ensure_player,
+        ):
+            await discord_bot.play.callback(self.ctx, requested.url)
+
+        self.assertEqual(
+            list(discord_bot.song_queues[self.guild.id]),
+            [waiting, requested],
+        )
+        self.ctx.send.assert_awaited_once_with('Queued: requested')
+        ensure_player.assert_awaited_once_with(
+            self.guild, self.voice_channel
+        )
+
+    async def test_playp_puts_track_next_without_interrupting_playback(self):
+        requested = self.make_track('priority')
+        waiting = [self.make_track('first'), self.make_track('second')]
+        current = self.make_track('current')
+        session = discord_bot.PlaybackSession(current)
+        discord_bot.song_queues[self.guild.id] = deque(waiting)
+        discord_bot.active_playbacks[self.guild.id] = session
+
+        with (
+            patch.object(
+                discord_bot.asyncio,
+                'to_thread',
+                new=AsyncMock(return_value=([requested], 0, False)),
+            ),
+            patch.object(discord_bot, 'ensure_player', new=AsyncMock()),
+        ):
+            await discord_bot.playp.callback(self.ctx, requested.url)
+
+        self.assertEqual(
+            list(discord_bot.song_queues[self.guild.id]),
+            [requested, *waiting],
+        )
+        self.assertIs(discord_bot.active_playbacks[self.guild.id], session)
+        self.assertFalse(session.skip_requested)
+        self.ctx.send.assert_awaited_once_with('Queued next: priority')
+
+    async def test_playp_prioritizes_playlist_in_its_original_order(self):
+        playlist = [self.make_track('one'), self.make_track('two')]
+        waiting = self.make_track('waiting')
+        discord_bot.song_queues[self.guild.id] = deque([waiting])
+
+        with (
+            patch.object(
+                discord_bot.asyncio,
+                'to_thread',
+                new=AsyncMock(return_value=(playlist, 1, True)),
+            ),
+            patch.object(discord_bot, 'ensure_player', new=AsyncMock()),
+        ):
+            await discord_bot.playp.callback(self.ctx, 'playlist-url')
+
+        self.assertEqual(
+            list(discord_bot.song_queues[self.guild.id]),
+            [*playlist, waiting],
+        )
+        self.ctx.send.assert_awaited_once_with(
+            'Queued 2 playlist tracks next; 1 unavailable skipped.'
+        )
+
+    async def test_commands_share_voice_and_volume_validation(self):
+        self.ctx.message.author.voice = None
+
+        await discord_bot.playp.callback(self.ctx, 'track-url')
+
+        self.ctx.send.assert_awaited_once_with('Join a voice channel first.')
+        self.ctx.send.reset_mock()
+        voice = type('VoiceState', (), {'channel': self.voice_channel})()
+        self.ctx.message.author.voice = voice
+
+        await discord_bot.play.callback(self.ctx, 'track-url', '2.1')
+
+        self.ctx.send.assert_awaited_once_with(
+            'Volume must be a number between 0 and 2.'
+        )
+
+    async def test_commands_share_extraction_error_and_empty_result_handling(self):
+        with patch.object(
+            discord_bot.asyncio,
+            'to_thread',
+            new=AsyncMock(side_effect=RuntimeError('failed')),
+        ):
+            await discord_bot.playp.callback(self.ctx, 'broken-url')
+
+        self.ctx.send.assert_awaited_once_with('Could not read that link.')
+        self.assertNotIn(
+            (self.guild.id, 'broken-url'), discord_bot.pending_links
+        )
+        self.ctx.send.reset_mock()
+
+        with patch.object(
+            discord_bot.asyncio,
+            'to_thread',
+            new=AsyncMock(return_value=([], 0, False)),
+        ):
+            await discord_bot.play.callback(self.ctx, 'empty-url')
+
+        self.ctx.send.assert_awaited_once_with(
+            'No playable tracks were found.'
+        )
+
+    async def test_duplicate_pending_link_is_ignored(self):
+        request_key = (self.guild.id, 'pending-url')
+        discord_bot.pending_links.add(request_key)
+        to_thread = AsyncMock()
+
+        with patch.object(
+            discord_bot.asyncio, 'to_thread', new=to_thread
+        ):
+            await discord_bot.playp.callback(self.ctx, 'pending-url')
+
+        to_thread.assert_not_awaited()
+        self.ctx.send.assert_not_awaited()
+
+    async def test_voice_connection_error_is_reported_after_queueing(self):
+        requested = self.make_track('priority')
+
+        with (
+            patch.object(
+                discord_bot.asyncio,
+                'to_thread',
+                new=AsyncMock(return_value=([requested], 0, False)),
+            ),
+            patch.object(
+                discord_bot,
+                'ensure_player',
+                new=AsyncMock(side_effect=RuntimeError('failed')),
+            ),
+        ):
+            await discord_bot.playp.callback(self.ctx, requested.url)
+
+        self.assertEqual(
+            [call.args[0] for call in self.ctx.send.await_args_list],
+            [
+                'Queued next: priority',
+                'Could not connect to the voice channel.',
+            ],
+        )
+
+
 class PlayerWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_reports_final_skip_after_playback_retries_fail(self):
         guild = type('Guild', (), {'id': 6060})()
