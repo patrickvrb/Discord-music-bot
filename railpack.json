@@ -1,5 +1,8 @@
 {
   "$schema": "https://schema.railpack.com",
+  "packages": {
+    "deno": "2.8.1"
+  },
   "deploy": {
     "aptPackages": [
       "libopus0"

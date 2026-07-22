@@ -157,6 +157,30 @@ pending_links = set()
 active_playbacks = {}
 
 
+class YTDLPLogger:
+    """Forward yt-dlp warnings and errors to the deployment log."""
+
+    @staticmethod
+    def debug(message):
+        if not message.startswith('[debug] '):
+            print(f'yt-dlp: {message}')
+
+    @staticmethod
+    def info(message):
+        print(f'yt-dlp: {message}')
+
+    @staticmethod
+    def warning(message):
+        print(f'yt-dlp warning: {message}')
+
+    @staticmethod
+    def error(message):
+        print(f'yt-dlp error: {message}')
+
+
+YTDLP_LOGGER = YTDLPLogger()
+
+
 def normalize_youtube_radio_url(url):
     """Strip generated YouTube radio context from an individual video URL."""
     try:
@@ -245,12 +269,14 @@ def track_from_info(info, original_url, volume, channel):
 def extract_single_track(url, volume, channel):
     ydl_opts = {
         'ignoreerrors': True,
+        'logger': YTDLP_LOGGER,
         'noplaylist': True,
-        'no_warnings': True,
+        'no_warnings': False,
         'quiet': True,
     }
     info = youtube_dl.YoutubeDL(ydl_opts).extract_info(url, download=False)
     if not info:
+        print(f'yt-dlp returned no track metadata for {url!r}')
         return []
     return [track_from_info(info, url, volume, channel)]
 
@@ -264,8 +290,9 @@ def extract_tracks(url, volume, channel):
         'extract_flat': True,
         'ignoreerrors': True,
         'lazy_playlist': True,
+        'logger': YTDLP_LOGGER,
         'noplaylist': False,
-        'no_warnings': True,
+        'no_warnings': False,
         'quiet': True,
     }
     extraction_url, selected_video_id = parse_youtube_playlist_url(url)
@@ -273,6 +300,7 @@ def extract_tracks(url, volume, channel):
         ydl_opts['playlistend'] = PLAYLIST_LIMIT
     info = youtube_dl.YoutubeDL(ydl_opts).extract_info(extraction_url, download=False)
     if not info:
+        print(f'yt-dlp returned no playlist metadata for {extraction_url!r}')
         return [], 1, False
 
     entries = info.get('entries')
@@ -310,9 +338,10 @@ def extract_tracks(url, volume, channel):
 def extract_audio(track):
     ydl_opts = {
         'format': 'bestaudio/best',
+        'logger': YTDLP_LOGGER,
         'nocheckcertificate': True,
         'noplaylist': True,
-        'no_warnings': True,
+        'no_warnings': False,
         'quiet': True,
         'source_address': '0.0.0.0',
     }
